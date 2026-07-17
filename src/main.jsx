@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ArrowRight, LogIn, MapPin, ReceiptText, Ruler, Scissors } from 'lucide-react';
@@ -83,6 +83,14 @@ async function exportPdf(element, fileName) {
   const canvas = await html2canvas(element, { scale: 2, backgroundColor: '#fff', useCORS: true });
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 210, 297);
+  if (!isDesktop()) {
+    pdf.setTextColor(210, 40, 40);
+    pdf.setFontSize(34);
+    pdf.setFont(undefined, 'bold');
+    pdf.text('SHANEX ONLINE PREVIEW', 105, 150, { align: 'center', angle: 35 });
+    pdf.setFontSize(12);
+    pdf.text('Generated online with watermark - use SHANEX Print Manager for clean output', 105, 166, { align: 'center', angle: 35 });
+  }
   return { dataUrl: pdf.output('datauristring'), fileName, mime: 'application/pdf' };
 }
 
@@ -617,6 +625,34 @@ async function pdfBytesToToolFile(bytes, fileName) {
   return { dataUrl, fileName, mime: 'application/pdf' };
 }
 
+async function applyOnlineWatermark(pdfDoc) {
+  if (isDesktop()) return;
+  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  for (const page of pdfDoc.getPages()) {
+    const { width, height } = page.getSize();
+    const main = 'SHANEX ONLINE PREVIEW';
+    const sub = 'Use SHANEX Print Manager for clean output';
+    page.drawText(main, {
+      x: width * 0.12,
+      y: height * 0.42,
+      size: Math.max(28, width / 15),
+      font,
+      color: rgb(0.86, 0.08, 0.08),
+      opacity: 0.22,
+      rotate: degrees(35),
+    });
+    page.drawText(sub, {
+      x: width * 0.2,
+      y: height * 0.34,
+      size: Math.max(11, width / 45),
+      font,
+      color: rgb(0.86, 0.08, 0.08),
+      opacity: 0.18,
+      rotate: degrees(35),
+    });
+  }
+}
+
 function drawCropMarks(page, x, y, w, h, mark = pt(4), gap = pt(1.5)) {
   const color = rgb(0.02, 0.04, 0.08);
   const thickness = 0.55;
@@ -680,6 +716,7 @@ function BusinessCardPlanner() {
         }
       }
       const fileName = `Business-Cards-${safeSlug(upload.name.replace(/\.pdf$/i, ''))}-${cfg.paper}-${cols * rows}up.pdf`;
+      await applyOnlineWatermark(out);
       sendOrDownload(await pdfBytesToToolFile(await out.save(), fileName));
     } finally {
       setBusy(false);
@@ -767,6 +804,7 @@ function BillNumbering() {
         }
       }
       const fileName = `Bill-Book-${cfg.start}-${total}-${up}up-${safeSlug(upload?.name?.replace(/\.pdf$/i, '') || 'numbering')}.pdf`;
+      await applyOnlineWatermark(out);
       sendOrDownload(await pdfBytesToToolFile(await out.save(), fileName));
     } finally {
       setBusy(false);
