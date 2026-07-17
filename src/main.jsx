@@ -175,8 +175,58 @@ function ToolsHome() {
 
 function LocationSearch({ label, value, onSelect }) {
   const [query, setQuery] = useState('');
+  const [pasteValue, setPasteValue] = useState('');
   const [results, setResults] = useState([]);
   const [status, setStatus] = useState('');
+  const applyPoint = (point) => {
+    onSelect(point);
+    setResults([]);
+    setStatus('');
+  };
+  const parseCoordinates = (text) => {
+    const raw = String(text || '').trim();
+    const decoded = (() => {
+      try { return decodeURIComponent(raw); } catch { return raw; }
+    })();
+    const patterns = [
+      /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+      /[?&](?:q|query|ll|center)=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/,
+      /@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)(?:,|\b)/,
+      /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/,
+    ];
+    for (const pattern of patterns) {
+      const match = decoded.match(pattern);
+      if (!match) continue;
+      const lat = Number(match[1]);
+      const lng = Number(match[2]);
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        return { lat, lng, label: /^https?:\/\//i.test(raw) ? 'Pasted Google Maps location' : raw };
+      }
+    }
+    return null;
+  };
+  const pasteLocation = async () => {
+    const text = pasteValue.trim();
+    if (!text) return;
+    setStatus('Reading location...');
+    const direct = parseCoordinates(text);
+    if (direct) {
+      applyPoint(direct);
+      return;
+    }
+    if (/^https?:\/\//i.test(text)) {
+      try {
+        const resolved = await fetch(`/api/resolve-map-link?url=${encodeURIComponent(text)}`).then(r => r.ok ? r.json() : null);
+        if (resolved?.lat && resolved?.lng) {
+          applyPoint({ lat: Number(resolved.lat), lng: Number(resolved.lng), label: resolved.resolvedUrl || text });
+          return;
+        }
+      } catch {
+        // Fall through to the user-facing status below.
+      }
+    }
+    setStatus('Could not read coordinates from that paste. Use a Google Maps link or lat,lng.');
+  };
   const search = async () => {
     if (!query.trim()) return;
     setStatus('Searching...');
@@ -208,9 +258,13 @@ function LocationSearch({ label, value, onSelect }) {
     <div className="location-search">
       <label>{label}</label>
       <div className="inline"><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); search(); } }} /><button onClick={search}>Search</button></div>
+      <div className="inline">
+        <input value={pasteValue} onChange={e => setPasteValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); pasteLocation(); } }} placeholder="Paste Google Maps link or 6.872031, 80.139786" />
+        <button onClick={pasteLocation}>Use Paste</button>
+      </div>
       {value && <small>{Number(value.lat).toFixed(6)}, {Number(value.lng).toFixed(6)}</small>}
       {status && <small>{status}</small>}
-      {!!results.length && <div className="results">{results.map(item => <button key={item.id} onClick={() => { onSelect(item); setResults([]); setStatus(''); }}>{item.label}</button>)}</div>}
+      {!!results.length && <div className="results">{results.map(item => <button key={item.id} onClick={() => applyPoint(item)}>{item.label}</button>)}</div>}
     </div>
   );
 }
@@ -328,7 +382,7 @@ function AhasDura() {
           <LocationSearch label="School location" value={school} onSelect={setSchool} />
           <label>Student name<input value={form.student} onChange={e => setForm({ ...form, student: e.target.value })} /></label>
           <label>School name<input value={form.school} onChange={e => setForm({ ...form, school: e.target.value })} /></label>
-          <label>Home address<textarea value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></label>
+          <label>Student home address<textarea value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="Student's full home address" /></label>
           <button className="primary" disabled={busy || !home || !school} onClick={generate}>{busy ? 'Generating...' : 'Add to SHANEX Print Queue'}</button>
         </div>
         <div className="card"><div className="map" ref={mapEl} /><div className="notice"><Ruler size={16} /> Sky distance: {distance.toFixed(2)} km</div></div>
