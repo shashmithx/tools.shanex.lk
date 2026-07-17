@@ -15,10 +15,10 @@
     "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
     "lucide-react": "latest",
+    "pdf-lib": "^1.17.1",
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest",
     "wrangler": "^3.0.0"
-  },
-  "devDependencies": {}
+  }
 }
