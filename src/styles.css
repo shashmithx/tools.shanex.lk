@@ -430,6 +430,66 @@ a {
   box-shadow: 0 8px 18px rgba(15, 23, 42, .12);
 }
 
+.google-map-sheet {
+  text-align: center;
+  font-family: Arial, sans-serif;
+}
+
+.google-route-meta {
+  margin: 6px 0 4px;
+  color: #3f3f46;
+  font-size: 17px;
+}
+
+.google-title {
+  margin-bottom: 18px;
+  color: #050816;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.google-static-map {
+  display: block;
+  width: 100%;
+  height: 610px;
+  object-fit: cover;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+}
+
+.google-map-credit {
+  margin: 10px 0 8px;
+  color: #111827;
+  font-size: 11px;
+}
+
+.google-measure-box {
+  width: 420px;
+  margin: 0 auto 18px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  padding: 13px 18px;
+  text-align: left;
+  font-size: 14px;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, .04);
+}
+
+.google-measure-box span,
+.google-measure-box strong {
+  display: block;
+}
+
+.google-measure-box strong {
+  margin-top: 7px;
+  font-weight: 500;
+}
+
+.google-details {
+  margin-top: 12px;
+  text-align: left;
+}
+
 .sky-details {
   margin-top: 20px;
 }

@@ -345,6 +345,9 @@ function AhasDura() {
   const [form, setForm] = useState({ student: '', school: '', address: '', note: '' });
   const [busy, setBusy] = useState(false);
   const [printOverlay, setPrintOverlay] = useState(null);
+  const [mapProvider, setMapProvider] = useState('google');
+  const [googleRoute, setGoogleRoute] = useState(null);
+  const [googleStatus, setGoogleStatus] = useState('');
 
   useEffect(() => { pickRef.current = pick; }, [pick]);
   useEffect(() => {
@@ -396,12 +399,43 @@ function AhasDura() {
     const a = Math.sin(rad(school.lat - home.lat) / 2) ** 2 + Math.cos(rad(home.lat)) * Math.cos(rad(school.lat)) * Math.sin(rad(school.lng - home.lng) / 2) ** 2;
     return 2 * 6371 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }, [home, school]);
+  useEffect(() => {
+    let cancelled = false;
+    setGoogleRoute(null);
+    setGoogleStatus('');
+    if (!home || !school || mapProvider !== 'google') return;
+    const loadRoute = async () => {
+      setGoogleStatus('Loading Google route...');
+      const qs = new URLSearchParams({
+        homeLat: String(home.lat),
+        homeLng: String(home.lng),
+        schoolLat: String(school.lat),
+        schoolLng: String(school.lng),
+      });
+      try {
+        const data = await fetch(`/api/google-route?${qs}`).then(r => r.ok ? r.json() : null);
+        if (cancelled) return;
+        if (data?.ok) {
+          setGoogleRoute(data);
+          setGoogleStatus('');
+        } else {
+          setGoogleStatus('Google Maps is not configured yet. Using OpenStreetMap PDF output.');
+        }
+      } catch {
+        if (!cancelled) setGoogleStatus('Google Maps failed. Using OpenStreetMap PDF output.');
+      }
+    };
+    loadRoute();
+    return () => { cancelled = true; };
+  }, [home, school, mapProvider]);
   const generate = async () => {
     if (!home || !school) return alert('Select home and school first.');
     setBusy(true);
     try {
-      await preparePrintMap(printMapRef.current, [[home.lat, home.lng], [school.lat, school.lng]], setPrintOverlay);
-      await wait(100);
+      if (!googleRoute?.ok) {
+        await preparePrintMap(printMapRef.current, [[home.lat, home.lng], [school.lat, school.lng]], setPrintOverlay);
+        await wait(100);
+      }
       const name = `Ahas-Dura-${(form.student || 'Student').replace(/\W+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`;
       sendOrDownload(await exportPdf(printRef.current, name));
     } finally { setBusy(false); }
@@ -410,6 +444,11 @@ function AhasDura() {
     <Layout title="Ahas Dura" subtitle="Sky Distance proof with a printable map, straight-line route, and distance label.">
       <div className="workspace">
         <div className="card form">
+          <div className="segmented">
+            <button className={mapProvider === 'google' ? 'active' : ''} onClick={() => setMapProvider('google')}>Google Map</button>
+            <button className={mapProvider === 'osm' ? 'active' : ''} onClick={() => setMapProvider('osm')}>Street Map</button>
+          </div>
+          {googleStatus && <div className="notice">{googleStatus}</div>}
           <div className="segmented"><button className={pick === 'home' ? 'active' : ''} onClick={() => setPick('home')}>Pick Home</button><button className={pick === 'school' ? 'active' : ''} onClick={() => setPick('school')}>Pick School</button></div>
           <LocationSearch label="Home location" value={home} onSelect={setHome} />
           <LocationSearch label="School location" value={school} onSelect={setSchool} />
@@ -418,10 +457,29 @@ function AhasDura() {
           <label>Student home address<textarea value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="Student's full home address" /></label>
           <button className="primary" disabled={busy || !home || !school} onClick={generate}>{busy ? 'Generating...' : 'Add to SHANEX Print Queue'}</button>
         </div>
-        <div className="card"><div className="map" ref={mapEl} /><div className="notice"><Ruler size={16} /> Sky distance: {distance.toFixed(2)} km</div></div>
+        <div className="card"><div className="map" ref={mapEl} /><div className="notice"><Ruler size={16} /> Sky distance: {distance.toFixed(2)} km{googleRoute?.ok ? ` | Road: ${googleRoute.distanceText}, ${googleRoute.durationText}` : ''}</div></div>
       </div>
       <div className="print-stage">
         <div className="print-sheet sky-distance-sheet" ref={printRef}>
+          {googleRoute?.ok ? (
+            <div className="google-map-sheet">
+              <div className="google-route-meta">Two-wheeler&nbsp;&nbsp; {googleRoute.distanceText}&nbsp;&nbsp; {googleRoute.durationText}</div>
+              <div className="google-title">
+                {home.lat.toFixed(7)}, {home.lng.toFixed(7)} to<br />
+                {form.school || school?.label || 'School'}
+              </div>
+              <img className="google-static-map" alt="Google route map" src={googleRoute.mapUrl} />
+              <div className="google-map-credit">Imagery and map data by Google</div>
+              <div className="google-measure-box">
+                <span>Measure distance</span>
+                <strong>Total distance: {distance.toFixed(2)} km ({(distance * 0.621371).toFixed(2)} mi)</strong>
+              </div>
+              <div className="sky-details google-details">
+                <InfoTable rows={[['Student', form.student || '-'], ['School', form.school || school?.label || '-'], ['Home Address', form.address || home?.label || '-'], ['Sky Distance', `${distance.toFixed(2)} km`], ['Road Route', `${googleRoute.distanceText} | ${googleRoute.durationText}`], ['Generated Date', new Date().toLocaleDateString('en-LK')]]} />
+              </div>
+            </div>
+          ) : (
+            <>
           <div className="sky-title">Sky Distance : {form.school || 'School'} - Home</div>
           <div className="paper-map-wrap">
             <div className="paper-map" ref={printMapEl} />
@@ -451,6 +509,8 @@ function AhasDura() {
           <div className="sky-details">
             <InfoTable rows={[['Student', form.student || '-'], ['School', form.school || school?.label || '-'], ['Home Address', form.address || home?.label || '-'], ['Sky Distance', `${distance.toFixed(2)} km`], ['Generated Date', new Date().toLocaleDateString('en-LK')]]} />
           </div>
+            </>
+          )}
           <Footer />
         </div>
       </div>
