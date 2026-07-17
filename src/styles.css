@@ -377,6 +377,23 @@ a {
   box-shadow: 0 1px 0 rgba(255, 255, 255, .65), 0 2px 5px rgba(15, 23, 42, .18);
 }
 
+.paper-road-route {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.paper-road-route polyline {
+  fill: none;
+  stroke: #1d4ed8;
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, .85));
+}
+
 .paper-route-pin {
   position: absolute;
   width: 150px;

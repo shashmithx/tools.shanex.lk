@@ -289,9 +289,10 @@ function waitForMapTiles(map) {
   ]).then(() => wait(350));
 }
 
-async function preparePrintMap(map, points, onReady) {
+async function preparePrintMap(map, points, routePoints, onReady) {
   if (!map) return null;
   const bounds = L.latLngBounds(points);
+  if (routePoints?.length) bounds.extend(routePoints);
   map.invalidateSize(true);
   map.fitBounds(bounds, { padding: [90, 90], animate: false });
   await wait(150);
@@ -304,9 +305,14 @@ async function preparePrintMap(map, points, onReady) {
   const container = map.getContainer();
   const homePoint = map.latLngToContainerPoint(points[0]);
   const schoolPoint = map.latLngToContainerPoint(points[1]);
+  const projectedRoute = (routePoints?.length ? routePoints : points).map(point => {
+    const projected = map.latLngToContainerPoint(point);
+    return { left: projected.x, top: projected.y };
+  });
   const next = {
     home: { left: homePoint.x, top: homePoint.y },
     school: { left: schoolPoint.x, top: schoolPoint.y },
+    route: projectedRoute,
     line: {
       left: homePoint.x,
       top: homePoint.y,
@@ -345,9 +351,11 @@ function AhasDura() {
   const [form, setForm] = useState({ student: '', school: '', address: '', note: '' });
   const [busy, setBusy] = useState(false);
   const [printOverlay, setPrintOverlay] = useState(null);
-  const [mapProvider, setMapProvider] = useState('google');
+  const [mapProvider, setMapProvider] = useState('osm');
   const [googleRoute, setGoogleRoute] = useState(null);
   const [googleStatus, setGoogleStatus] = useState('');
+  const [streetRoute, setStreetRoute] = useState(null);
+  const [streetStatus, setStreetStatus] = useState('');
 
   useEffect(() => { pickRef.current = pick; }, [pick]);
   useEffect(() => {
@@ -387,12 +395,15 @@ function AhasDura() {
     }
     if (pts.length === 2) {
       L.polyline(pts, { color: '#f6c21a', weight: 5, opacity: 0.95 }).addTo(layer);
+      if (streetRoute?.points?.length) {
+        L.polyline(streetRoute.points, { color: '#1d4ed8', weight: 5, opacity: 0.95 }).addTo(layer);
+      }
       mapRef.current?.fitBounds(pts, { padding: [70, 70] });
       printMapRef.current?.fitBounds(pts, { padding: [90, 90] });
     } else {
       setPrintOverlay(null);
     }
-  }, [home, school, form.school]);
+  }, [home, school, form.school, streetRoute]);
   const distance = useMemo(() => {
     if (!home || !school) return 0;
     const rad = d => d * Math.PI / 180;
@@ -428,12 +439,45 @@ function AhasDura() {
     loadRoute();
     return () => { cancelled = true; };
   }, [home, school, mapProvider]);
+  useEffect(() => {
+    let cancelled = false;
+    setStreetRoute(null);
+    setStreetStatus('');
+    if (!home || !school) return;
+    const loadRoute = async () => {
+      setStreetStatus('Loading street route...');
+      const url = `https://router.project-osrm.org/route/v1/driving/${home.lng},${home.lat};${school.lng},${school.lat}?overview=full&geometries=geojson`;
+      try {
+        const data = await fetch(url).then(r => r.ok ? r.json() : null);
+        if (cancelled) return;
+        const route = data?.routes?.[0];
+        if (!route?.geometry?.coordinates?.length) {
+          setStreetStatus('Street route not found. Showing sky distance only.');
+          return;
+        }
+        const seconds = Number(route.duration || 0);
+        const minutes = Math.max(1, Math.round(seconds / 60));
+        const km = Number(route.distance || 0) / 1000;
+        setStreetRoute({
+          distanceKm: km,
+          distanceText: `${km.toFixed(1)} km`,
+          durationText: minutes >= 60 ? `${Math.floor(minutes / 60)} hr ${minutes % 60} min` : `${minutes} min`,
+          points: route.geometry.coordinates.map(([lng, lat]) => [lat, lng]),
+        });
+        setStreetStatus('');
+      } catch {
+        if (!cancelled) setStreetStatus('Street route failed. Showing sky distance only.');
+      }
+    };
+    loadRoute();
+    return () => { cancelled = true; };
+  }, [home, school]);
   const generate = async () => {
     if (!home || !school) return alert('Select home and school first.');
     setBusy(true);
     try {
       if (!googleRoute?.ok) {
-        await preparePrintMap(printMapRef.current, [[home.lat, home.lng], [school.lat, school.lng]], setPrintOverlay);
+        await preparePrintMap(printMapRef.current, [[home.lat, home.lng], [school.lat, school.lng]], streetRoute?.points, setPrintOverlay);
         await wait(100);
       }
       const name = `Ahas-Dura-${(form.student || 'Student').replace(/\W+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`;
@@ -445,10 +489,11 @@ function AhasDura() {
       <div className="workspace">
         <div className="card form">
           <div className="segmented">
-            <button className={mapProvider === 'google' ? 'active' : ''} onClick={() => setMapProvider('google')}>Google Map</button>
             <button className={mapProvider === 'osm' ? 'active' : ''} onClick={() => setMapProvider('osm')}>Street Map</button>
+            <button className={mapProvider === 'google' ? 'active' : ''} onClick={() => setMapProvider('google')}>Google Map</button>
           </div>
           {googleStatus && <div className="notice">{googleStatus}</div>}
+          {streetStatus && <div className="notice">{streetStatus}</div>}
           <div className="segmented"><button className={pick === 'home' ? 'active' : ''} onClick={() => setPick('home')}>Pick Home</button><button className={pick === 'school' ? 'active' : ''} onClick={() => setPick('school')}>Pick School</button></div>
           <LocationSearch label="Home location" value={home} onSelect={setHome} />
           <LocationSearch label="School location" value={school} onSelect={setSchool} />
@@ -457,7 +502,7 @@ function AhasDura() {
           <label>Student home address<textarea value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="Student's full home address" /></label>
           <button className="primary" disabled={busy || !home || !school} onClick={generate}>{busy ? 'Generating...' : 'Add to SHANEX Print Queue'}</button>
         </div>
-        <div className="card"><div className="map" ref={mapEl} /><div className="notice"><Ruler size={16} /> Sky distance: {distance.toFixed(2)} km{googleRoute?.ok ? ` | Road: ${googleRoute.distanceText}, ${googleRoute.durationText}` : ''}</div></div>
+        <div className="card"><div className="map" ref={mapEl} /><div className="notice"><Ruler size={16} /> Sky distance: {distance.toFixed(2)} km{streetRoute ? ` | Street: ${streetRoute.distanceText}, ${streetRoute.durationText}` : ''}{googleRoute?.ok ? ` | Google: ${googleRoute.distanceText}, ${googleRoute.durationText}` : ''}</div></div>
       </div>
       <div className="print-stage">
         <div className="print-sheet sky-distance-sheet" ref={printRef}>
@@ -485,15 +530,21 @@ function AhasDura() {
             <div className="paper-map" ref={printMapEl} />
             {printOverlay && (
               <div className="paper-route-layer">
-                <div
-                  className="paper-route-line"
-                  style={{
-                    left: printOverlay.line.left,
-                    top: printOverlay.line.top,
-                    width: printOverlay.line.width,
-                    transform: `rotate(${printOverlay.line.angle}deg)`,
-                  }}
-                />
+                {streetRoute?.points?.length ? (
+                  <svg className="paper-road-route" viewBox={`0 0 ${printOverlay.mapWidth} ${printOverlay.mapHeight}`} preserveAspectRatio="none">
+                    <polyline points={printOverlay.route.map(point => `${point.left},${point.top}`).join(' ')} />
+                  </svg>
+                ) : (
+                  <div
+                    className="paper-route-line"
+                    style={{
+                      left: printOverlay.line.left,
+                      top: printOverlay.line.top,
+                      width: printOverlay.line.width,
+                      transform: `rotate(${printOverlay.line.angle}deg)`,
+                    }}
+                  />
+                )}
                 <div className="paper-route-pin paper-route-pin-home" style={{ left: printOverlay.home.left, top: printOverlay.home.top }}>
                   <span />
                   <strong>Home</strong>
@@ -507,7 +558,7 @@ function AhasDura() {
             <div className="distance-label">{distance.toFixed(2)} km</div>
           </div>
           <div className="sky-details">
-            <InfoTable rows={[['Student', form.student || '-'], ['School', form.school || school?.label || '-'], ['Home Address', form.address || home?.label || '-'], ['Sky Distance', `${distance.toFixed(2)} km`], ['Generated Date', new Date().toLocaleDateString('en-LK')]]} />
+            <InfoTable rows={[['Student', form.student || '-'], ['School', form.school || school?.label || '-'], ['Home Address', form.address || home?.label || '-'], ['Sky Distance', `${distance.toFixed(2)} km`], ['Street Route', streetRoute ? `${streetRoute.distanceText} | ${streetRoute.durationText}` : '-'], ['Generated Date', new Date().toLocaleDateString('en-LK')]]} />
           </div>
             </>
           )}
