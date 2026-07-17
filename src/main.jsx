@@ -289,6 +289,38 @@ function waitForMapTiles(map) {
   ]).then(() => wait(350));
 }
 
+async function preparePrintMap(map, points, onReady) {
+  if (!map) return null;
+  const bounds = L.latLngBounds(points);
+  map.invalidateSize(true);
+  map.fitBounds(bounds, { padding: [90, 90], animate: false });
+  await wait(150);
+  map.invalidateSize(true);
+  map.fitBounds(bounds, { padding: [90, 90], animate: false });
+  await waitForMapTiles(map);
+  map.eachLayer(layer => {
+    if (typeof layer.redraw === 'function') layer.redraw();
+  });
+  const container = map.getContainer();
+  const homePoint = map.latLngToContainerPoint(points[0]);
+  const schoolPoint = map.latLngToContainerPoint(points[1]);
+  const next = {
+    home: { left: homePoint.x, top: homePoint.y },
+    school: { left: schoolPoint.x, top: schoolPoint.y },
+    line: {
+      left: homePoint.x,
+      top: homePoint.y,
+      width: Math.hypot(schoolPoint.x - homePoint.x, schoolPoint.y - homePoint.y),
+      angle: Math.atan2(schoolPoint.y - homePoint.y, schoolPoint.x - homePoint.x) * 180 / Math.PI,
+    },
+    mapWidth: container.clientWidth,
+    mapHeight: container.clientHeight,
+  };
+  onReady?.(next);
+  await wait(250);
+  return next;
+}
+
 function makePin(label) {
   return L.divIcon({
     className: 'map-pin-label',
@@ -312,6 +344,7 @@ function AhasDura() {
   const [school, setSchool] = useState(null);
   const [form, setForm] = useState({ student: '', school: '', address: '', note: '' });
   const [busy, setBusy] = useState(false);
+  const [printOverlay, setPrintOverlay] = useState(null);
 
   useEffect(() => { pickRef.current = pick; }, [pick]);
   useEffect(() => {
@@ -344,18 +377,17 @@ function AhasDura() {
     if (home) {
       pts.push([home.lat, home.lng]);
       L.marker([home.lat, home.lng], { icon: makePin('Home') }).addTo(layer);
-      L.marker([home.lat, home.lng], { icon: makePin('Home') }).addTo(printLayer);
     }
     if (school) {
       pts.push([school.lat, school.lng]);
       L.marker([school.lat, school.lng], { icon: makePin(form.school || 'School') }).addTo(layer);
-      L.marker([school.lat, school.lng], { icon: makePin(form.school || 'School') }).addTo(printLayer);
     }
     if (pts.length === 2) {
       L.polyline(pts, { color: '#f6c21a', weight: 5, opacity: 0.95 }).addTo(layer);
-      L.polyline(pts, { color: '#f6c21a', weight: 7, opacity: 0.95 }).addTo(printLayer);
       mapRef.current?.fitBounds(pts, { padding: [70, 70] });
       printMapRef.current?.fitBounds(pts, { padding: [90, 90] });
+    } else {
+      setPrintOverlay(null);
     }
   }, [home, school, form.school]);
   const distance = useMemo(() => {
@@ -368,7 +400,8 @@ function AhasDura() {
     if (!home || !school) return alert('Select home and school first.');
     setBusy(true);
     try {
-      await waitForMapTiles(printMapRef.current);
+      await preparePrintMap(printMapRef.current, [[home.lat, home.lng], [school.lat, school.lng]], setPrintOverlay);
+      await wait(100);
       const name = `Ahas-Dura-${(form.student || 'Student').replace(/\W+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`;
       sendOrDownload(await exportPdf(printRef.current, name));
     } finally { setBusy(false); }
@@ -392,6 +425,27 @@ function AhasDura() {
           <div className="sky-title">Sky Distance : {form.school || 'School'} - Home</div>
           <div className="paper-map-wrap">
             <div className="paper-map" ref={printMapEl} />
+            {printOverlay && (
+              <div className="paper-route-layer">
+                <div
+                  className="paper-route-line"
+                  style={{
+                    left: printOverlay.line.left,
+                    top: printOverlay.line.top,
+                    width: printOverlay.line.width,
+                    transform: `rotate(${printOverlay.line.angle}deg)`,
+                  }}
+                />
+                <div className="paper-route-pin paper-route-pin-home" style={{ left: printOverlay.home.left, top: printOverlay.home.top }}>
+                  <span />
+                  <strong>Home</strong>
+                </div>
+                <div className="paper-route-pin paper-route-pin-school" style={{ left: printOverlay.school.left, top: printOverlay.school.top }}>
+                  <span />
+                  <strong>{form.school || 'School'}</strong>
+                </div>
+              </div>
+            )}
             <div className="distance-label">{distance.toFixed(2)} km</div>
           </div>
           <div className="sky-details">
