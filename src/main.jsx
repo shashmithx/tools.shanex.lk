@@ -4,7 +4,7 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ArrowRight, Download, LogIn, MapPin, ReceiptText, Ruler, Scissors } from 'lucide-react';
+import { ArrowRight, LogIn, MapPin, ReceiptText, Ruler, Scissors } from 'lucide-react';
 import './styles.css';
 
 const shopStoreKey = 'shanex-tools-session';
@@ -151,7 +151,7 @@ function ToolsHome() {
     if (!postDesktop({ type: 'import-template', template })) alert('Open this page inside SHANEX Print Manager to import templates.');
   };
   const tools = [
-    { path: '/tools/akas-dura', name: 'Akas Dura', icon: MapPin, text: 'Home-to-school distance proof for admissions.' },
+    { path: '/tools/ahas-dura', name: 'Ahas Dura', icon: MapPin, text: 'Sky distance proof for school admissions.' },
     { path: '/tools/business-card-planner', name: 'Business Card Planner', icon: Scissors, text: 'Card sheets with bleed and cut marks.' },
     { path: '/tools/bill-numbering', name: 'Bill Book Numbering', icon: ReceiptText, text: 'Stack numbering for easy cutting.' },
   ];
@@ -176,26 +176,81 @@ function ToolsHome() {
 function LocationSearch({ label, value, onSelect }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
+  const [status, setStatus] = useState('');
   const search = async () => {
     if (!query.trim()) return;
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&countrycodes=lk`;
-    const data = await fetch(url).then(r => r.json());
-    setResults(Array.isArray(data) ? data : []);
+    setStatus('Searching...');
+    setResults([]);
+    const q = /\bsri\s*lanka\b/i.test(query) ? query : `${query}, Sri Lanka`;
+    try {
+      const nominatim = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(q)}&limit=8&countrycodes=lk&addressdetails=1&accept-language=en`;
+      const data = await fetch(nominatim, { headers: { Accept: 'application/json' } }).then(r => r.ok ? r.json() : []);
+      if (Array.isArray(data) && data.length) {
+        setResults(data.map(item => ({ id: `osm-${item.place_id}`, lat: Number(item.lat), lng: Number(item.lon), label: item.display_name })));
+        setStatus('');
+        return;
+      }
+      const photon = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en&bbox=79.3,5.7,82.2,10.1`;
+      const fallback = await fetch(photon).then(r => r.ok ? r.json() : null);
+      const features = Array.isArray(fallback?.features) ? fallback.features : [];
+      setResults(features.map((feature, index) => {
+        const props = feature.properties || {};
+        const [lng, lat] = feature.geometry?.coordinates || [];
+        const labelParts = [props.name, props.street, props.city || props.county, props.state, props.country].filter(Boolean);
+        return { id: `photon-${index}-${lat}-${lng}`, lat: Number(lat), lng: Number(lng), label: labelParts.join(', ') || q };
+      }).filter(item => Number.isFinite(item.lat) && Number.isFinite(item.lng)));
+      setStatus(features.length ? '' : 'No results found. Try a nearby town or click the map.');
+    } catch {
+      setStatus('Search failed. Try again or click the map to pin manually.');
+    }
   };
   return (
     <div className="location-search">
       <label>{label}</label>
       <div className="inline"><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); search(); } }} /><button onClick={search}>Search</button></div>
       {value && <small>{Number(value.lat).toFixed(6)}, {Number(value.lng).toFixed(6)}</small>}
-      {!!results.length && <div className="results">{results.map(item => <button key={item.place_id} onClick={() => { onSelect({ lat: Number(item.lat), lng: Number(item.lon), label: item.display_name }); setResults([]); }}>{item.display_name}</button>)}</div>}
+      {status && <small>{status}</small>}
+      {!!results.length && <div className="results">{results.map(item => <button key={item.id} onClick={() => { onSelect(item); setResults([]); setStatus(''); }}>{item.label}</button>)}</div>}
     </div>
   );
 }
 
-function AkasDura() {
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function waitForMapTiles(map) {
+  if (!map) return Promise.resolve();
+  map.invalidateSize();
+  const container = map.getContainer();
+  const tiles = Array.from(container.querySelectorAll('img.leaflet-tile'));
+  const pending = tiles.filter(tile => !tile.complete || tile.naturalWidth === 0);
+  if (!pending.length) return wait(250);
+  return Promise.race([
+    Promise.all(pending.map(tile => new Promise(resolve => {
+      tile.addEventListener('load', resolve, { once: true });
+      tile.addEventListener('error', resolve, { once: true });
+    }))),
+    wait(4500),
+  ]).then(() => wait(350));
+}
+
+function makePin(label) {
+  return L.divIcon({
+    className: 'map-pin-label',
+    html: `<span class="map-pin-dot"></span><strong>${label}</strong>`,
+    iconSize: [132, 78],
+    iconAnchor: [28, 54],
+  });
+}
+
+function AhasDura() {
   const mapEl = useRef(null);
+  const printMapEl = useRef(null);
   const mapRef = useRef(null);
+  const printMapRef = useRef(null);
   const layerRef = useRef(null);
+  const printLayerRef = useRef(null);
   const pickRef = useRef('home');
   const printRef = useRef(null);
   const [pick, setPick] = useState('home');
@@ -208,7 +263,7 @@ function AkasDura() {
   useEffect(() => {
     if (!mapEl.current || mapRef.current) return;
     const map = L.map(mapEl.current).setView([7.8731, 80.7718], 8);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, crossOrigin: true, attribution: '&copy; OpenStreetMap' }).addTo(map);
     layerRef.current = L.layerGroup().addTo(map);
     map.on('click', e => {
       const point = { lat: e.latlng.lat, lng: e.latlng.lng, label: 'Pinned location' };
@@ -218,14 +273,37 @@ function AkasDura() {
     return () => map.remove();
   }, []);
   useEffect(() => {
+    if (!printMapEl.current || printMapRef.current) return;
+    const map = L.map(printMapEl.current, { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false }).setView([7.8731, 80.7718], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, crossOrigin: true }).addTo(map);
+    printLayerRef.current = L.layerGroup().addTo(map);
+    printMapRef.current = map;
+    return () => map.remove();
+  }, []);
+  useEffect(() => {
     const layer = layerRef.current;
-    if (!layer) return;
+    const printLayer = printLayerRef.current;
+    if (!layer || !printLayer) return;
     layer.clearLayers();
+    printLayer.clearLayers();
     const pts = [];
-    if (home) { pts.push([home.lat, home.lng]); L.circleMarker([home.lat, home.lng], { radius: 8, color: '#0ea5e9', fillColor: '#0ea5e9', fillOpacity: 1 }).addTo(layer).bindTooltip('Home'); }
-    if (school) { pts.push([school.lat, school.lng]); L.circleMarker([school.lat, school.lng], { radius: 8, color: '#ef4444', fillColor: '#ef4444', fillOpacity: 1 }).addTo(layer).bindTooltip('School'); }
-    if (pts.length === 2) { L.polyline(pts, { color: '#2563eb', weight: 4 }).addTo(layer); mapRef.current?.fitBounds(pts, { padding: [40, 40] }); }
-  }, [home, school]);
+    if (home) {
+      pts.push([home.lat, home.lng]);
+      L.marker([home.lat, home.lng], { icon: makePin('Home') }).addTo(layer);
+      L.marker([home.lat, home.lng], { icon: makePin('Home') }).addTo(printLayer);
+    }
+    if (school) {
+      pts.push([school.lat, school.lng]);
+      L.marker([school.lat, school.lng], { icon: makePin(form.school || 'School') }).addTo(layer);
+      L.marker([school.lat, school.lng], { icon: makePin(form.school || 'School') }).addTo(printLayer);
+    }
+    if (pts.length === 2) {
+      L.polyline(pts, { color: '#f6c21a', weight: 5, opacity: 0.95 }).addTo(layer);
+      L.polyline(pts, { color: '#f6c21a', weight: 7, opacity: 0.95 }).addTo(printLayer);
+      mapRef.current?.fitBounds(pts, { padding: [70, 70] });
+      printMapRef.current?.fitBounds(pts, { padding: [90, 90] });
+    }
+  }, [home, school, form.school]);
   const distance = useMemo(() => {
     if (!home || !school) return 0;
     const rad = d => d * Math.PI / 180;
@@ -236,12 +314,13 @@ function AkasDura() {
     if (!home || !school) return alert('Select home and school first.');
     setBusy(true);
     try {
-      const name = `Akas-Dura-${(form.student || 'Student').replace(/\W+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`;
+      await waitForMapTiles(printMapRef.current);
+      const name = `Ahas-Dura-${(form.student || 'Student').replace(/\W+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`;
       sendOrDownload(await exportPdf(printRef.current, name));
     } finally { setBusy(false); }
   };
   return (
-    <Layout title="Akas Dura" subtitle="Mark home and school locations and generate an A4 distance proof.">
+    <Layout title="Ahas Dura" subtitle="Sky Distance proof with a printable map, straight-line route, and distance label.">
       <div className="workspace">
         <div className="card form">
           <div className="segmented"><button className={pick === 'home' ? 'active' : ''} onClick={() => setPick('home')}>Pick Home</button><button className={pick === 'school' ? 'active' : ''} onClick={() => setPick('school')}>Pick School</button></div>
@@ -252,9 +331,21 @@ function AkasDura() {
           <label>Home address<textarea value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></label>
           <button className="primary" disabled={busy || !home || !school} onClick={generate}>{busy ? 'Generating...' : 'Add to SHANEX Print Queue'}</button>
         </div>
-        <div className="card"><div className="map" ref={mapEl} /><div className="notice"><Ruler size={16} /> Straight distance: {distance.toFixed(2)} km</div></div>
+        <div className="card"><div className="map" ref={mapEl} /><div className="notice"><Ruler size={16} /> Sky distance: {distance.toFixed(2)} km</div></div>
       </div>
-      <div className="print-stage"><div className="print-sheet" ref={printRef}><SheetHeader title="Akas Dura Distance Certificate" subtitle={new Date().toLocaleDateString('en-LK')} /><div className="map-art"><div className="map-grid" /><div className="route-line" /><div className="pin home">Home</div><div className="pin school">School</div><strong>{distance.toFixed(2)} km</strong></div><InfoTable rows={[['Student', form.student || '-'], ['School', form.school || '-'], ['Home Address', form.address || home?.label || '-'], ['Home Coordinates', home ? `${home.lat.toFixed(6)}, ${home.lng.toFixed(6)}` : '-'], ['School Coordinates', school ? `${school.lat.toFixed(6)}, ${school.lng.toFixed(6)}` : '-']]} /><Footer /></div></div>
+      <div className="print-stage">
+        <div className="print-sheet sky-distance-sheet" ref={printRef}>
+          <div className="sky-title">Sky Distance : {form.school || 'School'} - Home</div>
+          <div className="paper-map-wrap">
+            <div className="paper-map" ref={printMapEl} />
+            <div className="distance-label">{distance.toFixed(2)} km</div>
+          </div>
+          <div className="sky-details">
+            <InfoTable rows={[['Student', form.student || '-'], ['School', form.school || school?.label || '-'], ['Home Address', form.address || home?.label || '-'], ['Sky Distance', `${distance.toFixed(2)} km`], ['Generated Date', new Date().toLocaleDateString('en-LK')]]} />
+          </div>
+          <Footer />
+        </div>
+      </div>
     </Layout>
   );
 }
@@ -302,7 +393,7 @@ function BillNumbering() {
 }
 
 function App() {
-  const pages = { '/': <ToolsHome />, '/desktop-login': <DesktopLogin />, '/tools': <ToolsHome />, '/tools/akas-dura': <AkasDura />, '/tools/business-card-planner': <BusinessCardPlanner />, '/tools/bill-numbering': <BillNumbering /> };
+  const pages = { '/': <ToolsHome />, '/desktop-login': <DesktopLogin />, '/tools': <ToolsHome />, '/tools/ahas-dura': <AhasDura />, '/tools/akas-dura': <AhasDura />, '/tools/business-card-planner': <BusinessCardPlanner />, '/tools/bill-numbering': <BillNumbering /> };
   return pages[route()] || <ToolsHome />;
 }
 
